@@ -114,20 +114,24 @@ export function useNetlifyDeploy() {
 
       async function getAllFiles(dirPath: string): Promise<Record<string, string>> {
         const files: Record<string, string> = {};
-        const entries = await container.fs.readdir(dirPath, { withFileTypes: true });
+        const entries = await container.fs.readdir(dirPath);
 
         for (const entry of entries) {
-          const fullPath = path.join(dirPath, entry.name);
+          const fullPath = path.join(dirPath, entry);
 
-          if (entry.isFile()) {
+          try {
             const content = await container.fs.readFile(fullPath, 'utf-8');
 
             // Remove build path prefix from the path
             const deployPath = fullPath.replace(finalBuildPath, '');
             files[deployPath] = content;
-          } else if (entry.isDirectory()) {
-            const subFiles = await getAllFiles(fullPath);
-            Object.assign(files, subFiles);
+          } catch {
+            try {
+              const subFiles = await getAllFiles(fullPath);
+              Object.assign(files, subFiles);
+            } catch {
+              console.warn(`Skipping ${fullPath}: not a file or directory`);
+            }
           }
         }
 

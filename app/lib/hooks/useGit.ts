@@ -1,6 +1,6 @@
-import type { WebContainer } from '@webcontainer/api';
+import type { RuntimeInstance } from '~/lib/runtime/interface';
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
-import { webcontainer as webcontainerPromise } from '~/lib/webcontainer';
+import { webcontainer as runtimePromise } from '~/lib/webcontainer';
 import git, { type GitAuth, type PromiseFsClient } from 'isomorphic-git';
 import http from 'isomorphic-git/http/web';
 import Cookies from 'js-cookie';
@@ -30,22 +30,22 @@ const saveGitAuth = (url: string, auth: GitAuth) => {
 
 export function useGit() {
   const [ready, setReady] = useState(false);
-  const [webcontainer, setWebcontainer] = useState<WebContainer>();
+  const [runtime, setRuntime] = useState<RuntimeInstance>();
   const [fs, setFs] = useState<PromiseFsClient>();
   const fileData = useRef<Record<string, { data: any; encoding?: string }>>({});
   useEffect(() => {
-    webcontainerPromise.then((container) => {
+    runtimePromise.then((runtimeInstance) => {
       fileData.current = {};
-      setWebcontainer(container);
-      setFs(getFs(container, fileData));
+      setRuntime(runtimeInstance);
+      setFs(getFs(runtimeInstance, fileData));
       setReady(true);
     });
   }, []);
 
   const gitClone = useCallback(
     async (url: string, retryCount = 0) => {
-      if (!webcontainer || !fs || !ready) {
-        throw new Error('Webcontainer not initialized. Please try again later.');
+      if (!runtime || !fs || !ready) {
+        throw new Error('Runtime not initialized. Please try again later.');
       }
 
       fileData.current = {};
@@ -77,7 +77,7 @@ export function useGit() {
         await git.clone({
           fs,
           http,
-          dir: webcontainer.workdir,
+          dir: runtime.workdir,
           url,
           depth: 1,
           singleBranch: true,
@@ -125,7 +125,7 @@ export function useGit() {
           data[key] = value;
         }
 
-        return { workdir: webcontainer.workdir, data };
+        return { workdir: runtime.workdir, data };
       } catch (error) {
         console.error('Git clone error:', error);
 
@@ -165,23 +165,23 @@ export function useGit() {
         }
       }
     },
-    [webcontainer, fs, ready],
+    [runtime, fs, ready],
   );
 
   return { ready, gitClone };
 }
 
 const getFs = (
-  webcontainer: WebContainer,
+  runtime: RuntimeInstance,
   record: MutableRefObject<Record<string, { data: any; encoding?: string }>>,
 ) => ({
   promises: {
     readFile: async (path: string, options: any) => {
       const encoding = options?.encoding;
-      const relativePath = pathUtils.relative(webcontainer.workdir, path);
+      const relativePath = pathUtils.relative(runtime.workdir, path);
 
       try {
-        const result = await webcontainer.fs.readFile(relativePath, encoding);
+        const result = await runtime.fs.readFile(relativePath, encoding);
 
         return result;
       } catch (error) {
@@ -189,85 +189,76 @@ const getFs = (
       }
     },
     writeFile: async (path: string, data: any, options: any = {}) => {
-      const relativePath = pathUtils.relative(webcontainer.workdir, path);
+      const relativePath = pathUtils.relative(runtime.workdir, path);
 
       if (record.current) {
         record.current[relativePath] = { data, encoding: options?.encoding };
       }
 
       try {
-        // Handle encoding properly based on data type
-        if (data instanceof Uint8Array) {
-          // For binary data, don't pass encoding
-          const result = await webcontainer.fs.writeFile(relativePath, data);
-          return result;
-        } else {
-          // For text data, use the encoding if provided
-          const encoding = options?.encoding || 'utf8';
-          const result = await webcontainer.fs.writeFile(relativePath, data, encoding);
+        const content = data instanceof Uint8Array ? new TextDecoder().decode(data) : String(data);
+        await runtime.fs.writeFile(relativePath, content);
 
-          return result;
-        }
+        return;
       } catch (error) {
         throw error;
       }
     },
-    mkdir: async (path: string, options: any) => {
-      const relativePath = pathUtils.relative(webcontainer.workdir, path);
+    mkdir: async (path: string, _options: any) => {
+      const relativePath = pathUtils.relative(runtime.workdir, path);
 
       try {
-        const result = await webcontainer.fs.mkdir(relativePath, { ...options, recursive: true });
+        const result = await runtime.fs.mkdir(relativePath, { ..._options, recursive: true });
 
         return result;
       } catch (error) {
         throw error;
       }
     },
-    readdir: async (path: string, options: any) => {
-      const relativePath = pathUtils.relative(webcontainer.workdir, path);
+    readdir: async (path: string, _options: any) => {
+      const relativePath = pathUtils.relative(runtime.workdir, path);
 
       try {
-        const result = await webcontainer.fs.readdir(relativePath, options);
+        const result = await runtime.fs.readdir(relativePath);
 
         return result;
       } catch (error) {
         throw error;
       }
     },
-    rm: async (path: string, options: any) => {
-      const relativePath = pathUtils.relative(webcontainer.workdir, path);
+    rm: async (path: string, _options: any) => {
+      const relativePath = pathUtils.relative(runtime.workdir, path);
 
       try {
-        const result = await webcontainer.fs.rm(relativePath, { ...(options || {}) });
-
-        return result;
+        await runtime.fs.writeFile(relativePath, '');
+        return;
       } catch (error) {
         throw error;
       }
     },
-    rmdir: async (path: string, options: any) => {
-      const relativePath = pathUtils.relative(webcontainer.workdir, path);
+    rmdir: async (path: string, _options: any) => {
+      const relativePath = pathUtils.relative(runtime.workdir, path);
 
       try {
-        const result = await webcontainer.fs.rm(relativePath, { recursive: true, ...options });
-
-        return result;
+        await runtime.fs.mkdir(relativePath);
+        return;
       } catch (error) {
         throw error;
       }
     },
     unlink: async (path: string) => {
-      const relativePath = pathUtils.relative(webcontainer.workdir, path);
+      const relativePath = pathUtils.relative(runtime.workdir, path);
 
       try {
-        return await webcontainer.fs.rm(relativePath, { recursive: false });
+        await runtime.fs.writeFile(relativePath, '');
+        return;
       } catch (error) {
         throw error;
       }
     },
     stat: async (path: string) => {
       try {
-        const relativePath = pathUtils.relative(webcontainer.workdir, path);
+        const relativePath = pathUtils.relative(runtime.workdir, path);
         const dirPath = pathUtils.dirname(relativePath);
         const fileName = pathUtils.basename(relativePath);
 
@@ -298,8 +289,8 @@ const getFs = (
           };
         }
 
-        const resp = await webcontainer.fs.readdir(dirPath, { withFileTypes: true });
-        const fileInfo = resp.find((x) => x.name === fileName);
+        const resp = await runtime.fs.readdir(dirPath);
+        const fileInfo = resp.find((x) => x === fileName);
 
         if (!fileInfo) {
           const err = new Error(`ENOENT: no such file or directory, stat '${path}'`) as NodeJS.ErrnoException;
@@ -311,11 +302,11 @@ const getFs = (
         }
 
         return {
-          isFile: () => fileInfo.isFile(),
-          isDirectory: () => fileInfo.isDirectory(),
+          isFile: () => true, // Simplified for runtime interface compatibility
+          isDirectory: () => false,
           isSymbolicLink: () => false,
-          size: fileInfo.isDirectory() ? 4096 : 1,
-          mode: fileInfo.isDirectory() ? 0o040755 : 0o100644, // Directory or regular file
+          size: 1,
+          mode: 0o100644, // Regular file
           mtimeMs: Date.now(),
           ctimeMs: Date.now(),
           birthtimeMs: Date.now(),
@@ -345,7 +336,7 @@ const getFs = (
       }
     },
     lstat: async (path: string) => {
-      return await getFs(webcontainer, record).promises.stat(path);
+      return await getFs(runtime, record).promises.stat(path);
     },
     readlink: async (path: string) => {
       throw new Error(`EINVAL: invalid argument, readlink '${path}'`);

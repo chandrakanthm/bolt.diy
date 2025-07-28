@@ -110,20 +110,25 @@ export function useVercelDeploy() {
       // Get all files recursively
       async function getAllFiles(dirPath: string): Promise<Record<string, string>> {
         const files: Record<string, string> = {};
-        const entries = await container.fs.readdir(dirPath, { withFileTypes: true });
+        const entries = await container.fs.readdir(dirPath);
 
         for (const entry of entries) {
-          const fullPath = path.join(dirPath, entry.name);
+          const fullPath = path.join(dirPath, entry);
 
-          if (entry.isFile()) {
+          try {
+            // Try to read as file first
             const content = await container.fs.readFile(fullPath, 'utf-8');
 
             // Remove build path prefix from the path
             const deployPath = fullPath.replace(finalBuildPath, '');
             files[deployPath] = content;
-          } else if (entry.isDirectory()) {
-            const subFiles = await getAllFiles(fullPath);
-            Object.assign(files, subFiles);
+          } catch {
+            try {
+              const subFiles = await getAllFiles(fullPath);
+              Object.assign(files, subFiles);
+            } catch {
+              continue;
+            }
           }
         }
 
@@ -136,31 +141,33 @@ export function useVercelDeploy() {
       const allProjectFiles: Record<string, string> = {};
 
       async function getAllProjectFiles(dirPath: string): Promise<void> {
-        const entries = await container.fs.readdir(dirPath, { withFileTypes: true });
+        const entries = await container.fs.readdir(dirPath);
 
         for (const entry of entries) {
-          const fullPath = path.join(dirPath, entry.name);
+          const fullPath = path.join(dirPath, entry);
 
-          if (entry.isFile()) {
-            try {
-              const content = await container.fs.readFile(fullPath, 'utf-8');
+          try {
+            // Try to read as file first
+            const content = await container.fs.readFile(fullPath, 'utf-8');
 
-              // Store with relative path from project root
-              let relativePath = fullPath;
+            // Store with relative path from project root
+            let relativePath = fullPath;
 
-              if (fullPath.startsWith('/home/project/')) {
-                relativePath = fullPath.replace('/home/project/', '');
-              } else if (fullPath.startsWith('./')) {
-                relativePath = fullPath.replace('./', '');
-              }
-
-              allProjectFiles[relativePath] = content;
-            } catch (error) {
-              // Skip binary files or files that can't be read as text
-              console.log(`Skipping file ${entry.name}: ${error}`);
+            if (fullPath.startsWith('/home/project/')) {
+              relativePath = fullPath.replace('/home/project/', '');
+            } else if (fullPath.startsWith('./')) {
+              relativePath = fullPath.replace('./', '');
             }
-          } else if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
-            await getAllProjectFiles(fullPath);
+
+            allProjectFiles[relativePath] = content;
+          } catch (error) {
+            if (!entry.startsWith('.') && entry !== 'node_modules') {
+              try {
+                await getAllProjectFiles(fullPath);
+              } catch {
+                console.log(`Skipping directory ${entry}: ${error}`);
+              }
+            }
           }
         }
       }

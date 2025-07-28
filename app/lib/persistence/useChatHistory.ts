@@ -224,7 +224,7 @@ ${value.content}
 
   const restoreSnapshot = useCallback(async (id: string, snapshot?: Snapshot) => {
     // const snapshotStr = localStorage.getItem(`snapshot:${id}`); // Remove localStorage usage
-    const container = await webcontainer;
+    const runtime = await webcontainer;
 
     const validSnapshot = snapshot || { chatIndex: '', files: {} };
 
@@ -233,21 +233,21 @@ ${value.content}
     }
 
     Object.entries(validSnapshot.files).forEach(async ([key, value]) => {
-      if (key.startsWith(container.workdir)) {
-        key = key.replace(container.workdir, '');
+      if (key.startsWith(runtime.workdir)) {
+        key = key.replace(runtime.workdir, '');
       }
 
       if (value?.type === 'folder') {
-        await container.fs.mkdir(key, { recursive: true });
+        await runtime.fs.mkdir(key, { recursive: true });
       }
     });
     Object.entries(validSnapshot.files).forEach(async ([key, value]) => {
       if (value?.type === 'file') {
-        if (key.startsWith(container.workdir)) {
-          key = key.replace(container.workdir, '');
+        if (key.startsWith(runtime.workdir)) {
+          key = key.replace(runtime.workdir, '');
         }
 
-        await container.fs.writeFile(key, value.content, { encoding: value.isBinary ? undefined : 'utf8' });
+        await runtime.fs.writeFile(key, value.content);
       } else {
       }
     });

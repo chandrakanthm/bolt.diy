@@ -1,14 +1,14 @@
-import type { WebContainer, WebContainerProcess } from '@webcontainer/api';
+import type { RuntimeInstance, ProcessInstance } from '~/lib/runtime/interface';
 import type { ITerminal } from '~/types/terminal';
 import { withResolvers } from './promises';
 import { atom } from 'nanostores';
 import { expoUrlAtom } from '~/lib/stores/qrCodeStore';
 
-export async function newShellProcess(webcontainer: WebContainer, terminal: ITerminal) {
+export async function newShellProcess(runtime: RuntimeInstance, terminal: ITerminal) {
   const args: string[] = [];
 
   // we spawn a JSH process with a fallback cols and rows in case the process is not attached yet to a visible terminal
-  const process = await webcontainer.spawn('/bin/jsh', ['--osc', ...args], {
+  const process = await runtime.spawn('/bin/jsh', ['--osc', ...args], {
     terminal: {
       cols: terminal.cols ?? 80,
       rows: terminal.rows ?? 15,
@@ -58,9 +58,9 @@ export type ExecutionResult = { output: string; exitCode: number } | undefined;
 export class BoltShell {
   #initialized: (() => void) | undefined;
   #readyPromise: Promise<void>;
-  #webcontainer: WebContainer | undefined;
+  #runtime: RuntimeInstance | undefined;
   #terminal: ITerminal | undefined;
-  #process: WebContainerProcess | undefined;
+  #process: ProcessInstance | undefined;
   executionState = atom<
     { sessionId: string; active: boolean; executionPrms?: Promise<any>; abort?: () => void } | undefined
   >();
@@ -77,12 +77,12 @@ export class BoltShell {
     return this.#readyPromise;
   }
 
-  async init(webcontainer: WebContainer, terminal: ITerminal) {
-    this.#webcontainer = webcontainer;
+  async init(runtime: RuntimeInstance, terminal: ITerminal) {
+    this.#runtime = runtime;
     this.#terminal = terminal;
 
     // Use all three streams from tee: one for terminal, one for command execution, one for Expo URL detection
-    const { process, commandStream, expoUrlStream } = await this.newBoltShellProcess(webcontainer, terminal);
+    const { process, commandStream, expoUrlStream } = await this.newBoltShellProcess(runtime, terminal);
     this.#process = process;
     this.#outputStream = commandStream.getReader();
 
@@ -93,9 +93,9 @@ export class BoltShell {
     this.#initialized?.();
   }
 
-  async newBoltShellProcess(webcontainer: WebContainer, terminal: ITerminal) {
+  async newBoltShellProcess(runtime: RuntimeInstance, terminal: ITerminal) {
     const args: string[] = [];
-    const process = await webcontainer.spawn('/bin/jsh', ['--osc', ...args], {
+    const process = await runtime.spawn('/bin/jsh', ['--osc', ...args], {
       terminal: {
         cols: terminal.cols ?? 80,
         rows: terminal.rows ?? 15,

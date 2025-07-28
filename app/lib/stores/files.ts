@@ -1,4 +1,5 @@
-import type { PathWatcherEvent, WebContainer } from '@webcontainer/api';
+import type { PathWatcherEvent } from '@webcontainer/api';
+import type { RuntimeInstance } from '~/lib/runtime/interface';
 import { getEncoding } from 'istextorbinary';
 import { map, type MapStore } from 'nanostores';
 import { Buffer } from 'node:buffer';
@@ -45,7 +46,7 @@ type Dirent = File | Folder;
 export type FileMap = Record<string, Dirent | undefined>;
 
 export class FilesStore {
-  #webcontainer: Promise<WebContainer>;
+  #runtime: Promise<RuntimeInstance>;
 
   /**
    * Tracks the number of files without folders.
@@ -73,8 +74,8 @@ export class FilesStore {
     return this.#size;
   }
 
-  constructor(webcontainerPromise: Promise<WebContainer>) {
-    this.#webcontainer = webcontainerPromise;
+  constructor(runtimePromise: Promise<RuntimeInstance>) {
+    this.#runtime = runtimePromise;
 
     // Load deleted paths from localStorage if available
     try {
@@ -548,10 +549,10 @@ export class FilesStore {
   }
 
   async saveFile(filePath: string, content: string) {
-    const webcontainer = await this.#webcontainer;
+    const runtime = await this.#runtime;
 
     try {
-      const relativePath = path.relative(webcontainer.workdir, filePath);
+      const relativePath = path.relative(runtime.workdir, filePath);
 
       if (!relativePath) {
         throw new Error(`EINVAL: invalid file path, write '${relativePath}'`);
@@ -563,7 +564,7 @@ export class FilesStore {
         unreachable('Expected content to be defined');
       }
 
-      await webcontainer.fs.writeFile(relativePath, content);
+      await runtime.fs.writeFile(relativePath, content);
 
       if (!this.#modifiedFiles.has(filePath)) {
         this.#modifiedFiles.set(filePath, oldContent);
@@ -590,20 +591,22 @@ export class FilesStore {
   }
 
   async #init() {
-    const webcontainer = await this.#webcontainer;
+    const runtime = await this.#runtime;
 
     // Clean up any files that were previously deleted
     this.#cleanupDeletedFiles();
 
-    // Set up file watcher
-    webcontainer.internal.watchPaths(
-      {
-        include: [`${WORK_DIR}/**`],
-        exclude: ['**/node_modules', '.git', '**/package-lock.json'],
-        includeContent: true,
-      },
-      bufferWatchEvents(100, this.#processEventBuffer.bind(this)),
-    );
+    // Set up file watcher (if supported by runtime)
+    if ((runtime as any).internal?.watchPaths) {
+      (runtime as any).internal.watchPaths(
+        {
+          include: [`${WORK_DIR}/**`],
+          exclude: ['**/node_modules', '.git', '**/package-lock.json'],
+          includeContent: true,
+        },
+        bufferWatchEvents(100, this.#processEventBuffer.bind(this)),
+      );
+    }
 
     // Get the current chat ID
     const currentChatId = getCurrentChatId();
@@ -768,10 +771,10 @@ export class FilesStore {
   }
 
   async createFile(filePath: string, content: string | Uint8Array = '') {
-    const webcontainer = await this.#webcontainer;
+    const runtime = await this.#runtime;
 
     try {
-      const relativePath = path.relative(webcontainer.workdir, filePath);
+      const relativePath = path.relative(runtime.workdir, filePath);
 
       if (!relativePath) {
         throw new Error(`EINVAL: invalid file path, create '${relativePath}'`);
@@ -780,13 +783,14 @@ export class FilesStore {
       const dirPath = path.dirname(relativePath);
 
       if (dirPath !== '.') {
-        await webcontainer.fs.mkdir(dirPath, { recursive: true });
+        await runtime.fs.mkdir(dirPath, { recursive: true });
       }
 
       const isBinary = content instanceof Uint8Array;
 
       if (isBinary) {
-        await webcontainer.fs.writeFile(relativePath, Buffer.from(content));
+        const binaryContent = Buffer.from(content).toString('base64');
+        await runtime.fs.writeFile(relativePath, binaryContent);
 
         const base64Content = Buffer.from(content).toString('base64');
         this.files.setKey(filePath, {
@@ -799,7 +803,7 @@ export class FilesStore {
         this.#modifiedFiles.set(filePath, base64Content);
       } else {
         const contentToWrite = (content as string).length === 0 ? ' ' : content;
-        await webcontainer.fs.writeFile(relativePath, contentToWrite);
+        await runtime.fs.writeFile(relativePath, contentToWrite);
 
         this.files.setKey(filePath, {
           type: 'file',
@@ -821,16 +825,16 @@ export class FilesStore {
   }
 
   async createFolder(folderPath: string) {
-    const webcontainer = await this.#webcontainer;
+    const runtime = await this.#runtime;
 
     try {
-      const relativePath = path.relative(webcontainer.workdir, folderPath);
+      const relativePath = path.relative(runtime.workdir, folderPath);
 
       if (!relativePath) {
         throw new Error(`EINVAL: invalid folder path, create '${relativePath}'`);
       }
 
-      await webcontainer.fs.mkdir(relativePath, { recursive: true });
+      await runtime.fs.mkdir(relativePath, { recursive: true });
 
       this.files.setKey(folderPath, { type: 'folder' });
 
@@ -844,16 +848,20 @@ export class FilesStore {
   }
 
   async deleteFile(filePath: string) {
-    const webcontainer = await this.#webcontainer;
+    const runtime = await this.#runtime;
 
     try {
-      const relativePath = path.relative(webcontainer.workdir, filePath);
+      const relativePath = path.relative(runtime.workdir, filePath);
 
       if (!relativePath) {
         throw new Error(`EINVAL: invalid file path, delete '${relativePath}'`);
       }
 
-      await webcontainer.fs.rm(relativePath);
+      if (runtime.fs.rm) {
+        await runtime.fs.rm(relativePath);
+      } else {
+        await runtime.fs.writeFile(relativePath, '');
+      }
 
       this.#deletedPaths.add(filePath);
 
@@ -876,16 +884,20 @@ export class FilesStore {
   }
 
   async deleteFolder(folderPath: string) {
-    const webcontainer = await this.#webcontainer;
+    const runtime = await this.#runtime;
 
     try {
-      const relativePath = path.relative(webcontainer.workdir, folderPath);
+      const relativePath = path.relative(runtime.workdir, folderPath);
 
       if (!relativePath) {
         throw new Error(`EINVAL: invalid folder path, delete '${relativePath}'`);
       }
 
-      await webcontainer.fs.rm(relativePath, { recursive: true });
+      if (runtime.fs.rm) {
+        await runtime.fs.rm(relativePath, { recursive: true });
+      } else {
+        console.warn(`Directory deletion not supported by runtime: ${relativePath}`);
+      }
 
       this.#deletedPaths.add(folderPath);
 

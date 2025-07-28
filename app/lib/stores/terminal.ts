@@ -1,18 +1,18 @@
-import type { WebContainer, WebContainerProcess } from '@webcontainer/api';
+import type { RuntimeInstance, ProcessInstance } from '~/lib/runtime/interface';
 import { atom, type WritableAtom } from 'nanostores';
 import type { ITerminal } from '~/types/terminal';
 import { newBoltShellProcess, newShellProcess } from '~/utils/shell';
 import { coloredText } from '~/utils/terminal';
 
 export class TerminalStore {
-  #webcontainer: Promise<WebContainer>;
-  #terminals: Array<{ terminal: ITerminal; process: WebContainerProcess }> = [];
+  #runtime: Promise<RuntimeInstance>;
+  #terminals: Array<{ terminal: ITerminal; process: ProcessInstance }> = [];
   #boltTerminal = newBoltShellProcess();
 
   showTerminal: WritableAtom<boolean> = import.meta.hot?.data.showTerminal ?? atom(true);
 
-  constructor(webcontainerPromise: Promise<WebContainer>) {
-    this.#webcontainer = webcontainerPromise;
+  constructor(runtimePromise: Promise<RuntimeInstance>) {
+    this.#runtime = runtimePromise;
 
     if (import.meta.hot) {
       import.meta.hot.data.showTerminal = this.showTerminal;
@@ -27,8 +27,8 @@ export class TerminalStore {
   }
   async attachBoltTerminal(terminal: ITerminal) {
     try {
-      const wc = await this.#webcontainer;
-      await this.#boltTerminal.init(wc, terminal);
+      const runtime = await this.#runtime;
+      await this.#boltTerminal.init(runtime, terminal);
     } catch (error: any) {
       terminal.write(coloredText.red('Failed to spawn bolt shell\n\n') + error.message);
       return;
@@ -37,7 +37,7 @@ export class TerminalStore {
 
   async attachTerminal(terminal: ITerminal) {
     try {
-      const shellProcess = await newShellProcess(await this.#webcontainer, terminal);
+      const shellProcess = await newShellProcess(await this.#runtime, terminal);
       this.#terminals.push({ terminal, process: shellProcess });
     } catch (error: any) {
       terminal.write(coloredText.red('Failed to spawn shell\n\n') + error.message);
@@ -47,7 +47,9 @@ export class TerminalStore {
 
   onTerminalResize(cols: number, rows: number) {
     for (const { process } of this.#terminals) {
-      process.resize({ cols, rows });
+      if ((process as any).resize) {
+        (process as any).resize({ cols, rows });
+      }
     }
   }
 
@@ -58,7 +60,9 @@ export class TerminalStore {
       const { process } = this.#terminals[terminalIndex];
 
       try {
-        process.kill();
+        if ((process as any).kill) {
+          (process as any).kill();
+        }
       } catch (error) {
         console.warn('Failed to kill terminal process:', error);
       }
